@@ -1,0 +1,26 @@
+{
+  "name": "agentic-workspace-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multi-tenant spatial AI-agent orchestration platform",
+  "scripts": {
+    "build": "pnpm --filter web build",
+    "dev:web": "pnpm --filter web dev",
+    "db:generate": "pnpm --filter db exec prisma generate",
+    "db:validate": "pnpm --filter db exec prisma validate",
+    "db:push": "pnpm --filter db exec prisma db push"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma"
+    ]
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.12",
+    "pg-gateway": "0.3.0-beta.4",
+    "pglite-server": "^0.1.5",
+    "typescript": "^5.6.3"
+  }
+}

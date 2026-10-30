@@ -1,0 +1,113 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  SUPER_ADMIN
+  WORKSPACE_ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum RunStatus {
+  PENDING
+  RUNNING
+  WAITING_FOR_HUMAN
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model User {
+  id            String          @id @default(uuid())
+  email         String          @unique
+  name          String?
+  avatarUrl     String?
+  role          Role            @default(MEMBER)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  memberships   WorkspaceMember[]
+  apiKeys       ApiKey[]
+}
+
+model Workspace {
+  id            String          @id @default(uuid())
+  name          String
+  slug          String          @unique
+  plan          String          @default("starter") // starter, pro, enterprise
+  credits       Int             @default(100000)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  members       WorkspaceMember[]
+  agents        Agent[]
+  documents     Document[]
+  runs          AgentRun[]
+}
+
+model WorkspaceMember {
+  id          String    @id @default(uuid())
+  role        Role      @default(MEMBER)
+  userId      String
+  workspaceId String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+}
+
+model Agent {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  name          String
+  description   String?
+  systemPrompt  String    @db.Text
+  modelProvider String    @default("openai") // openai, anthropic, google, deepseek
+  modelName     String    @default("gpt-4o")
+  temperature   Float     @default(0.7)
+  tools         Json      // Array of bound tool IDs
+  isTemplate    Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model Document {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  title         String
+  fileUrl       String?
+  qdrantCollectionId String?
+  metadata      Json?
+  createdAt     DateTime  @default(now())
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model AgentRun {
+  id            String      @id @default(uuid())
+  workspaceId   String
+  prompt        String      @db.Text
+  status        RunStatus   @default(PENDING)
+  totalTokens   Int         @default(0)
+  costUsd       Float       @default(0.0)
+  traceLogs     Json?       // Langfuse or step trace data
+  hitlState     Json?       // Data waiting for human confirmation
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  workspace     Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model ApiKey {
+  id          String   @id @default(uuid())
+  userId      String
+  keyHash     String   @unique
+  name        String
+  lastUsedAt  DateTime?
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
