@@ -1,10 +1,10 @@
 {
-  "/api/webhooks/stripe/route": "app/api/webhooks/stripe/route.js",
   "/api/webhooks/lago/route": "app/api/webhooks/lago/route.js",
+  "/api/webhooks/stripe/route": "app/api/webhooks/stripe/route.js",
   "/_not-found/page": "app/_not-found/page.js",
   "/page": "app/page.js",
-  "/admin/page": "app/admin/page.js",
   "/admin/metrics/page": "app/admin/metrics/page.js",
+  "/admin/page": "app/admin/page.js",
   "/admin/providers/page": "app/admin/providers/page.js",
   "/admin/users/page": "app/admin/users/page.js",
   "/(dashboard)/workspace/[id]/canvas/page": "app/(dashboard)/workspace/[id]/canvas/page.js"

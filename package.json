@@ -5,6 +5,7 @@
   "description": "Multi-tenant spatial AI-agent orchestration platform",
   "scripts": {
     "build": "pnpm --filter web build",
+    "test": "pnpm --filter web test",
     "dev:web": "pnpm --filter web dev",
     "db:generate": "pnpm --filter db exec prisma generate",
     "db:validate": "pnpm --filter db exec prisma validate",
