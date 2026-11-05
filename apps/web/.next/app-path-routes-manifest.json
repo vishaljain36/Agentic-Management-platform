@@ -1,0 +1,11 @@
+{
+  "/api/webhooks/stripe/route": "/api/webhooks/stripe",
+  "/api/webhooks/lago/route": "/api/webhooks/lago",
+  "/_not-found/page": "/_not-found",
+  "/page": "/",
+  "/admin/page": "/admin",
+  "/admin/metrics/page": "/admin/metrics",
+  "/admin/providers/page": "/admin/providers",
+  "/admin/users/page": "/admin/users",
+  "/(dashboard)/workspace/[id]/canvas/page": "/workspace/[id]/canvas"
+}
