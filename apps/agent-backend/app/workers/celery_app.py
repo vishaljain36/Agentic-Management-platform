@@ -1,21 +1,19 @@
-from celery import Celery
-from app.core.config import settings
+"""Re-export the production Celery app from workers.celery_app."""
 
-celery_app = Celery(
-    "agentic_worker",
-    broker=settings.REDIS_URL,
-    backend=settings.REDIS_URL,
-    include=["app.workers.tasks"]
+from workers.celery_app import (
+    celery_app,
+    CELERY_TASK_TIME_LIMIT,
+    CELERY_TASK_SOFT_TIME_LIMIT,
+    execute_agent_workflow,
+    ingest_document_rag,
+    aggregate_workspace_usage,
 )
 
-celery_app.conf.update(
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    timezone="UTC",
-    enable_utc=True,
-    task_track_started=True,
-    task_time_limit=300,
-    worker_prefetch_multiplier=1,
-)
-
+__all__ = [
+    "celery_app",
+    "CELERY_TASK_TIME_LIMIT",
+    "CELERY_TASK_SOFT_TIME_LIMIT",
+    "execute_agent_workflow",
+    "ingest_document_rag",
+    "aggregate_workspace_usage",
+]

@@ -6,7 +6,7 @@ type AppRouteHandlerRoutes = "/api/webhooks/lago" | "/api/webhooks/stripe"
 type PageRoutes = never
 type LayoutRoutes = "/" | "/admin"
 type RedirectRoutes = never
-type RewriteRoutes = never
+type RewriteRoutes = "/api/backend/[[...path]]" | "/api/backend/workflow/stream/[[...path]]" | "/api/backend/ws/[[...path]]"
 type Routes = AppRoutes | PageRoutes | LayoutRoutes | RedirectRoutes | RewriteRoutes | AppRouteHandlerRoutes
 
 
@@ -16,6 +16,9 @@ interface ParamMap {
   "/admin/metrics": {}
   "/admin/providers": {}
   "/admin/users": {}
+  "/api/backend/[[...path]]": { "path"?: string[]; }
+  "/api/backend/workflow/stream/[[...path]]": { "path"?: string[]; }
+  "/api/backend/ws/[[...path]]": { "path"?: string[]; }
   "/api/webhooks/lago": {}
   "/api/webhooks/stripe": {}
   "/workspace/[id]/canvas": { "id": string; }
