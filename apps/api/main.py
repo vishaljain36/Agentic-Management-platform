@@ -9,6 +9,7 @@ Includes:
 """
 
 import sys
+import os
 import time
 import uuid
 import traceback
@@ -23,16 +24,40 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
+try:
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.starlette import StarletteIntegration
+except ImportError:
+    sentry_sdk = None
+
 from app.core.config import settings
 from app.api.router import api_router
 from app.core.redis import get_redis_client
 from app.agents.tools.code_runner import is_docker_available
+from billing.metering import BudgetExceededError
+from routers.webhooks import router as webhooks_router
+
+# ---------------------------------------------------------------------------
+# Sentry Error Tracking Initialization
+# ---------------------------------------------------------------------------
+SENTRY_DSN = os.getenv("SENTRY_DSN")
+if SENTRY_DSN and sentry_sdk:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        traces_sample_rate=1.0,
+        environment=settings.NODE_ENV,
+        integrations=[
+            FastApiIntegration(),
+            StarletteIntegration(),
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
-# Rate Limiter: 120 requests/minute per client IP
+# Rate Limiter: 100 requests/minute per client IP (Redis token bucket)
 # ---------------------------------------------------------------------------
-limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +137,24 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Global Structured JSON Error Handler
 # ---------------------------------------------------------------------------
+@app.exception_handler(BudgetExceededError)
+async def budget_exceeded_handler(request: Request, exc: BudgetExceededError):
+    """Handle hard spending cap limit breaches with HTTP 402."""
+    request_id = getattr(request.state, "request_id", "unknown")
+    content = exc.detail if isinstance(exc.detail, dict) else {
+        "error": "BUDGET_CAP_EXCEEDED",
+        "message": str(exc.detail),
+        "workspace_id": exc.workspace_id,
+        "current_spend_usd": exc.current_spend,
+        "budget_cap_usd": exc.cap,
+    }
+    return JSONResponse(
+        status_code=402,
+        content=content,
+        headers={"X-Request-ID": request_id},
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Catch-all exception handler returning structured JSON error payloads."""
@@ -120,6 +163,8 @@ async def global_exception_handler(request: Request, exc: Exception):
 
     # Log the full trace server-side
     print(f"[ERROR] request_id={request_id} path={request.url.path} error={exc}")
+    if sentry_sdk and sentry_sdk.is_initialized():
+        sentry_sdk.capture_exception(exc)
     if settings.NODE_ENV != "production":
         for line in tb:
             print(line, end="")
@@ -137,8 +182,11 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # ---------------------------------------------------------------------------
-# API Router
+# API Routers
 # ---------------------------------------------------------------------------
+# Blueprint 4.3: POST /api/webhooks/stripe
+app.include_router(webhooks_router, prefix="/api")
+app.include_router(webhooks_router, prefix=settings.API_V1_PREFIX)
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
 

@@ -41,3 +41,53 @@ async def require_api_key(api_key: Optional[str] = Security(API_KEY_HEADER)) -> 
             detail="Missing required 'X-API-Key' authentication header",
         )
     return api_key
+
+
+# ---------------------------------------------------------------------------
+# JWT & RBAC Authentication (Roles: ADMIN, OPERATOR, VIEWER)
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timedelta, timezone
+import jwt
+from app.core.config import settings
+
+ROLE_HIERARCHY = {
+    "ADMIN": 3,
+    "OPERATOR": 2,
+    "VIEWER": 1,
+}
+
+
+def create_access_token(
+    payload: dict,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    """Issue a cryptographically signed JWT access token with role claims."""
+    to_encode = payload.copy()
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(hours=24))
+    to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc)})
+    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.ALGORITHM)
+
+
+def decode_access_token(token: str) -> dict:
+    """Decode and verify signature and expiry of a JWT access token."""
+    try:
+        return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token signature has expired",
+        )
+    except jwt.InvalidTokenError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid authorization token: {e}",
+        )
+
+
+def verify_rbac_role(user_role: str, minimum_required_role: str) -> bool:
+    """Validate if user's role meets or exceeds the required privilege level."""
+    user_level = ROLE_HIERARCHY.get(user_role.upper(), 0)
+    required_level = ROLE_HIERARCHY.get(minimum_required_role.upper(), 999)
+    return user_level >= required_level
+

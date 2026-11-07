@@ -387,3 +387,246 @@ def test_simulate_10k_budget_interruption(meter, rates):
         f"Expected interruption near event {expected_event}, got {interrupted_at}"
     )
 
+
+# ---------------------------------------------------------------------------
+# 8. Phase 10: Live Metered Billing & Webhook Audit Tests
+# ---------------------------------------------------------------------------
+
+from billing.metering import (
+    usage_meter,
+    push_usage_to_lago,
+    check_spending_cap,
+    enforce_spending_cap,
+    BudgetExceededError,
+    RATE_INPUT_PER_1K,
+    RATE_OUTPUT_PER_1K,
+    COST_PER_TOOL_HIT,
+    COST_PER_SANDBOX_MINUTE,
+)
+from routers.webhooks import reset_processed_events
+from app.agents.tools.sandbox_executor import execute_sandbox
+
+
+@pytest.fixture(autouse=True)
+def clean_billing_state():
+    """Reset webhook idempotency and usage meter before each test."""
+    reset_processed_events()
+    usage_meter._local_usage.clear()
+    usage_meter._local_budgets.clear()
+    usage_meter.pushed_lago_events.clear()
+    yield
+    reset_processed_events()
+    usage_meter._local_usage.clear()
+    usage_meter._local_budgets.clear()
+    usage_meter.pushed_lago_events.clear()
+
+
+def test_usage_event_metering_with_hybrid_rates():
+    """Verify granular usage logging: input tokens, output tokens, tool hits, sandbox minutes."""
+    ws_id = "ws-hybrid-metering"
+    usage_meter.reset_workspace(ws_id)
+
+    event = usage_meter.log_usage_event(
+        workspace_id=ws_id,
+        input_tokens=2000,       # 2k * $0.003 = $0.006
+        output_tokens=1000,      # 1k * $0.012 = $0.012
+        tool_hits=4,             # 4 * $0.005  = $0.020
+        sandbox_minutes=2.5,     # 2.5 * $0.010 = $0.025
+    )
+
+    expected_cost = round(0.006 + 0.012 + 0.020 + 0.025, 6)  # $0.063
+    assert event["workspace_id"] == ws_id
+    assert event["input_tokens"] == 2000
+    assert event["output_tokens"] == 1000
+    assert event["total_tokens"] == 3000
+    assert event["tool_hits"] == 4
+    assert event["sandbox_minutes"] == 2.5
+    assert abs(event["total_cost_usd"] - expected_cost) < 1e-6
+
+
+def test_push_usage_to_lago():
+    """Verify pushing aggregated usage payload to Lago Metered Billing Engine."""
+    ws_id = "ws-lago-push"
+    usage_meter.reset_workspace(ws_id)
+
+    usage_meter.log_usage_event(
+        workspace_id=ws_id,
+        input_tokens=5000,
+        output_tokens=2500,
+        tool_hits=2,
+        sandbox_minutes=1.0,
+    )
+
+    lago_payload = push_usage_to_lago(ws_id)
+
+    assert lago_payload["external_customer_id"] == ws_id
+    assert lago_payload["code"] == "agent_token_consumption"
+    assert "transaction_id" in lago_payload
+    assert lago_payload["properties"]["input_tokens"] == 5000
+    assert lago_payload["properties"]["output_tokens"] == 2500
+    assert lago_payload["properties"]["tool_hits"] == 2
+    assert lago_payload["properties"]["sandbox_minutes"] == 1.0
+    assert lago_payload["properties"]["calculated_cost_usd"] > 0.0
+    assert len(usage_meter.pushed_lago_events) == 1
+
+
+def test_stripe_webhook_subscription_lifecycle(app_client):
+    """Test POST /api/webhooks/stripe handling customer.subscription.created and deleted."""
+    ws_id = "ws-sub-cycle"
+    usage_meter.reset_workspace(ws_id)
+
+    # 1. customer.subscription.created -> allocates Pro tier cap ($50.00)
+    created_payload = {
+        "id": "evt_sub_created_001",
+        "type": "customer.subscription.created",
+        "data": {
+            "object": {
+                "id": "sub_12345",
+                "customer": "cus_12345",
+                "metadata": {"workspace_id": ws_id, "plan": "pro"},
+            }
+        },
+    }
+    resp1 = app_client.post("/api/webhooks/stripe", json=created_payload)
+    assert resp1.status_code == 200
+    data1 = resp1.json()
+    assert data1["status"] == "processed"
+    assert data1["workspace_id"] == ws_id
+    assert usage_meter.get_budget_cap(ws_id) == 50.00
+
+    # 2. customer.subscription.deleted -> degrades to Free tier cap ($1.00)
+    deleted_payload = {
+        "id": "evt_sub_deleted_002",
+        "type": "customer.subscription.deleted",
+        "data": {
+            "object": {
+                "id": "sub_12345",
+                "customer": "cus_12345",
+                "metadata": {"workspace_id": ws_id},
+            }
+        },
+    }
+    resp2 = app_client.post("/api/webhooks/stripe", json=deleted_payload)
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+    assert data2["status"] == "processed"
+    assert usage_meter.get_budget_cap(ws_id) == 1.00
+
+
+def test_stripe_webhook_invoice_success_and_failure(app_client):
+    """Test invoice.payment_succeeded renewing quota and invoice.payment_failed freezing execution."""
+    ws_id = "ws-invoice-flow"
+    usage_meter.reset_workspace(ws_id)
+
+    # Simulate existing usage
+    usage_meter.log_usage_event(ws_id, input_tokens=10000, output_tokens=10000)
+    assert usage_meter.get_workspace_usage(ws_id)["total_tokens"] == 20000
+
+    # 1. invoice.payment_succeeded -> resets usage meter and renews $50 cap
+    paid_payload = {
+        "id": "evt_inv_paid_003",
+        "type": "invoice.payment_succeeded",
+        "data": {
+            "object": {
+                "id": "in_12345",
+                "customer": "cus_12345",
+                "metadata": {"workspace_id": ws_id, "plan": "pro"},
+            }
+        },
+    }
+    resp1 = app_client.post("/api/webhooks/stripe", json=paid_payload)
+    assert resp1.status_code == 200
+    assert usage_meter.get_workspace_usage(ws_id)["total_tokens"] == 0
+    assert usage_meter.get_budget_cap(ws_id) == 50.00
+
+    # 2. invoice.payment_failed -> freezes workspace spending cap to 0.0
+    failed_payload = {
+        "id": "evt_inv_failed_004",
+        "type": "invoice.payment_failed",
+        "data": {
+            "object": {
+                "id": "in_12346",
+                "customer": "cus_12345",
+                "metadata": {"workspace_id": ws_id},
+            }
+        },
+    }
+    resp2 = app_client.post("/api/webhooks/stripe", json=failed_payload)
+    assert resp2.status_code == 200
+    assert usage_meter.get_budget_cap(ws_id) == 0.0
+    # Any usage now exceeds the cap
+    assert check_spending_cap(ws_id) is True
+
+
+def test_stripe_webhook_idempotency_guard(app_client):
+    """Verify duplicate webhook event IDs are detected and not processed twice."""
+    ws_id = "ws-idempotent-test"
+    event_payload = {
+        "id": "evt_idempotency_check_999",
+        "type": "invoice.payment_succeeded",
+        "data": {
+            "object": {
+                "id": "in_duplicate_test",
+                "customer": "cus_999",
+                "metadata": {"workspace_id": ws_id, "plan": "pro"},
+            }
+        },
+    }
+
+    # First delivery
+    resp1 = app_client.post("/api/webhooks/stripe", json=event_payload)
+    assert resp1.status_code == 200
+    assert resp1.json()["status"] == "processed"
+
+    # Second delivery (replay / retry)
+    resp2 = app_client.post("/api/webhooks/stripe", json=event_payload)
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+    assert data2["status"] == "duplicate"
+    assert "already been processed" in data2["message"]
+
+
+def test_hard_spending_cap_freezes_sandbox_tool_execution():
+    """Verify execute_sandbox raises BudgetExceededError when credit quota is exhausted."""
+    ws_id = "ws-credit-depleted"
+    usage_meter.reset_workspace(ws_id)
+    usage_meter.set_budget_cap(ws_id, cap_usd=0.01)
+
+    # Accumulate usage beyond $0.01 limit
+    usage_meter.log_usage_event(ws_id, input_tokens=5000, output_tokens=1000)  # $0.027
+    assert check_spending_cap(ws_id) is True
+
+    # Attempting high-cost sandbox execution must raise BudgetExceededError (402)
+    with pytest.raises(BudgetExceededError) as exc_info:
+        execute_sandbox("print('hello sandbox')", workspace_id=ws_id)
+
+    assert exc_info.value.status_code == 402
+    assert "exceeded its spending budget cap" in exc_info.value.detail["message"]
+
+
+def test_api_gateway_workflow_returns_402_on_depleted_credits(app_client):
+    """Verify POST /api/v1/workflow/run returns HTTP 402 when workspace spending limit is reached."""
+    ws_id = "ws-gateway-frozen"
+    usage_meter.reset_workspace(ws_id)
+    usage_meter.set_budget_cap(ws_id, cap_usd=0.005)
+
+    # Exhaust budget
+    usage_meter.log_usage_event(ws_id, input_tokens=2000, output_tokens=1000)  # ~$0.018
+    assert check_spending_cap(ws_id) is True
+
+    # Call workflow run endpoint with exhausted workspace
+    response = app_client.post(
+        "/api/v1/workflow/run",
+        json={
+            "workspace_id": ws_id,
+            "prompt": "Execute automated code refactoring workflow",
+        },
+    )
+
+    assert response.status_code == 402
+    data = response.json()
+    assert data["error"] == "BUDGET_CAP_EXCEEDED"
+    assert data["workspace_id"] == ws_id
+    assert "frozen" in data["message"].lower()
+
+

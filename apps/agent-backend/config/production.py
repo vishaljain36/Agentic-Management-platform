@@ -9,7 +9,7 @@ Handles:
 - Cloud environment verification & validation
 """
 
-from typing import Optional
+from typing import Optional, List
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,6 +22,12 @@ class ProductionSettings(BaseSettings):
     VERSION: str = "1.0.0"
     API_V1_PREFIX: str = "/api/v1"
     NODE_ENV: str = "production"
+
+    # Multi-Origin CORS configuration (comma-separated domain array)
+    FRONTEND_URL: str = Field(
+        default="https://app.agentic-void.io,http://localhost:3000",
+        description="Allowed CORS frontend URLs, comma-separated for staging and production",
+    )
 
     # 1. PostgreSQL (Supabase / Neon with Connection Pooling)
     # Typically: postgresql://[user]:[password]@[host]:6543/[dbname]?pgbouncer=true&sslmode=require
@@ -96,6 +102,25 @@ class ProductionSettings(BaseSettings):
     ALGORITHM: str = "HS256"
     WEB_CONCURRENCY: int = Field(default=4, description="Uvicorn worker concurrency")
 
+    @property
+    def cors_origins(self) -> List[str]:
+        """Parse FRONTEND_URL into a clean list of allowed origins."""
+        origins = [o.strip() for o in self.FRONTEND_URL.split(",") if o.strip()]
+        for fallback in ["http://localhost:3000", "http://127.0.0.1:3000"]:
+            if fallback not in origins:
+                origins.append(fallback)
+        return origins
+
+    @property
+    def is_redis_tls(self) -> bool:
+        """Return True if Redis URL uses TLS (rediss://)."""
+        return self.REDIS_URL.startswith("rediss://")
+
+    @property
+    def is_qdrant_tls(self) -> bool:
+        """Return True if Qdrant URL uses HTTPS TLS."""
+        return self.QDRANT_URL.startswith("https://")
+
     @field_validator("DATABASE_URL")
     @classmethod
     def validate_db_url(cls, v: str) -> str:
@@ -112,4 +137,3 @@ class ProductionSettings(BaseSettings):
 
 
 production_settings = ProductionSettings()
-

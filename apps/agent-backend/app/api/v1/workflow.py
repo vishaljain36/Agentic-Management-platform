@@ -2,13 +2,23 @@ import json
 import asyncio
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
-from fastapi import APIRouter, Request, Query, HTTPException, status
+from fastapi import APIRouter, Request, Query, HTTPException, status, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from langchain_core.messages import HumanMessage, AIMessage
 
 from app.agents.graphs.multi_agent_flow import MultiAgentWorkflow
 from app.core.redis import token_meter
+from orchestrator.tracing import telemetry_manager
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+try:
+    import sentry_sdk
+except ImportError:
+    sentry_sdk = None
+
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter()
 
@@ -18,6 +28,7 @@ active_runs: Dict[str, Dict[str, Any]] = {}
 
 class WorkflowRunRequest(BaseModel):
     run_id: Optional[str] = None
+    workspace_id: Optional[str] = None
     prompt: str = "Analyze system architecture and execute code validation"
     requires_approval: bool = True
 
@@ -30,6 +41,10 @@ class WorkflowResumeRequest(BaseModel):
 @router.post("/run")
 async def start_workflow_run(req: WorkflowRunRequest):
     """Initiate a workflow execution run."""
+    if req.workspace_id:
+        from billing.metering import enforce_spending_cap
+        enforce_spending_cap(req.workspace_id)
+
     run_id = req.run_id or f"run_{int(datetime.now(timezone.utc).timestamp()*1000)}"
     active_runs[run_id] = {
         "run_id": run_id,
@@ -56,16 +71,21 @@ async def resume_workflow_run(run_id: str, req: WorkflowResumeRequest):
 
 
 @router.get("/stream/{run_id}")
+@limiter.limit("10/minute")
 async def stream_workflow_run(
     request: Request,
     run_id: str,
     prompt: Optional[str] = None,
-    require_hitl: bool = True
+    require_hitl: bool = True,
+    workspace_id: Optional[str] = Query(None),
 ):
     """
     SSE streaming endpoint that delivers real-time token outputs,
     node execution states, HITL interruption events, and completion telemetry.
     """
+    if workspace_id:
+        from billing.metering import enforce_spending_cap
+        enforce_spending_cap(workspace_id)
     run_info = active_runs.get(run_id)
     if not run_info:
         active_runs[run_id] = {
@@ -208,4 +228,52 @@ async def stream_workflow_run(
             })
         }
 
-    return EventSourceResponse(event_generator(), ping=None)
+    async def monitored_event_generator():
+        async with telemetry_manager.track_sse():
+            try:
+                async for event in event_generator():
+                    yield event
+            except asyncio.CancelledError:
+                return
+            except Exception as stream_err:
+                if sentry_sdk:
+                    sentry_sdk.capture_exception(stream_err)
+                yield {
+                    "event": "error",
+                    "data": json.dumps({
+                        "event": "stream_error",
+                        "error": str(stream_err),
+                        "run_id": run_id
+                    })
+                }
+
+    return EventSourceResponse(monitored_event_generator(), ping=None)
+
+
+@router.websocket("/ws/{run_id}")
+async def websocket_workflow_run(websocket: WebSocket, run_id: str):
+    """Real-time bi-directional WebSocket connection for workflow streaming."""
+    await websocket.accept()
+    async with telemetry_manager.track_ws():
+        try:
+            # Send initial connected status
+            await websocket.send_text(json.dumps({
+                "event": "connected",
+                "run_id": run_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }))
+            while True:
+                msg = await websocket.receive_text()
+                # Echo / handle client commands
+                await websocket.send_text(json.dumps({
+                    "event": "ack",
+                    "run_id": run_id,
+                    "received": msg
+                }))
+        except WebSocketDisconnect:
+            pass
+        except Exception as exc:
+            if sentry_sdk:
+                sentry_sdk.capture_exception(exc)
+            await websocket.close(code=1011)
+

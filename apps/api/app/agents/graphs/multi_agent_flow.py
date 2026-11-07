@@ -4,6 +4,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from app.agents.state import AgentState
+from orchestrator.tracing import trace_agent_node
 
 
 class MultiAgentWorkflow:
@@ -14,6 +15,7 @@ class MultiAgentWorkflow:
         self.checkpointer = MemorySaver()
         self.graph = self._build_graph()
 
+    @trace_agent_node(node_name="researcher_agent", agent_type="agent")
     def researcher_node(self, state: AgentState) -> Dict[str, Any]:
         """Simulate web and document research step."""
         messages = state.get("messages", [])
@@ -24,6 +26,7 @@ class MultiAgentWorkflow:
             "next_step": "evaluator"
         }
 
+    @trace_agent_node(node_name="evaluator_agent", agent_type="agent")
     def evaluator_node(self, state: AgentState) -> Dict[str, Any]:
         """Evaluator checks if code/tool mutation requires human intervention."""
         messages = state.get("messages", [])
@@ -53,6 +56,7 @@ class MultiAgentWorkflow:
             "next_step": "final_writer"
         }
 
+    @trace_agent_node(node_name="human_approval_node", agent_type="checkpoint")
     def human_approval_node(self, state: AgentState) -> Dict[str, Any]:
         """Interruption checkpoint node for human approval."""
         approval_data = state.get("approval_data", {})
@@ -62,6 +66,7 @@ class MultiAgentWorkflow:
             "next_step": "final_writer"
         }
 
+    @trace_agent_node(node_name="final_writer_agent", agent_type="agent")
     def final_writer_node(self, state: AgentState) -> Dict[str, Any]:
         """Final node compiling agent synthesis and outputs."""
         messages = state.get("messages", [])

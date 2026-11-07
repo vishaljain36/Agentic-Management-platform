@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
+    "@sentry/nextjs": "^11.11.0",
     "@xyflow/react": "^12.3.6",
     "axios": "^1.7.9",
     "clsx": "^2.1.1",

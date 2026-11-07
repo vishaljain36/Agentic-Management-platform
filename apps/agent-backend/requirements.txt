@@ -13,4 +13,9 @@ pytest>=8.3.3
 pytest-asyncio>=0.24.0
 slowapi>=0.1.10
 e2b-code-interpreter>=2.11.0
+cryptography>=43.0.0
+nemoguardrails>=0.24.0
+langfuse>=2.50.0
+sentry-sdk[fastapi]>=2.10.0
+pyjwt>=2.8.0
 

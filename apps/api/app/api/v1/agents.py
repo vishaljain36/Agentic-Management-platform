@@ -49,6 +49,23 @@ async def list_agents():
     return list(_mock_agents.values())
 
 
+@router.get("/templates", response_model=List[dict])
+async def list_agent_templates():
+    """Retrieve all 5 pre-configured default marketplace agent templates."""
+    from scripts.seed_templates import get_default_templates
+    return get_default_templates()
+
+
+@router.get("/templates/{template_id}")
+async def get_agent_template(template_id: str):
+    """Retrieve a specific marketplace agent template by ID or slug."""
+    from scripts.seed_templates import get_default_templates
+    for tpl in get_default_templates():
+        if tpl["id"] == template_id or tpl["slug"] == template_id:
+            return tpl
+    raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found")
+
+
 @router.get("/{agent_id}", response_model=AgentResponse)
 async def get_agent(agent_id: str):
     """Retrieve an agent by its ID."""

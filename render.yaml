@@ -1,0 +1,101 @@
+# ==============================================================================
+# Render Blueprint Specification: Agentic Management Platform
+# Covers:
+# 1. FastAPI Web Service (Port 8000, autoscaling 1-4 instances, health checks)
+# 2. Celery Background Worker Service (Upstash Redis integration)
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. FastAPI Web Service
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: agentic-workspace-api
+    runtime: docker
+    dockerfilePath: apps/agent-backend/Dockerfile
+    dockerContext: apps/agent-backend
+    region: oregon
+    plan: standard
+    numInstances: 1
+    healthCheckPath: /healthz
+    autoDeploy: false
+    scaling:
+      minInstances: 1
+      maxInstances: 4
+      targetCPUPercent: 75
+      targetMemoryPercent: 75
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: NODE_ENV
+        value: production
+      - key: WEB_CONCURRENCY
+        value: 4
+      - key: FRONTEND_URL
+        value: "https://app.agentic-void.io"
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: E2B_API_KEY
+        sync: false
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: LANGFUSE_HOST
+        value: "https://cloud.langfuse.com"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_GEMINI_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+
+  # ----------------------------------------------------------------------------
+  # 2. Celery Background Worker Service
+  # ----------------------------------------------------------------------------
+  - type: worker
+    name: agentic-celery-worker
+    runtime: docker
+    dockerfilePath: apps/agent-backend/Dockerfile
+    dockerContext: apps/agent-backend
+    dockerCommand: celery -A workers.celery_app.celery_app worker --loglevel=info --concurrency=4
+    region: oregon
+    plan: standard
+    autoDeploy: false
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: E2B_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        fromService:
+          name: agentic-workspace-api
+          type: web
+          envVarKey: JWT_SECRET
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_GEMINI_API_KEY
+        sync: false
+

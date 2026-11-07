@@ -1,0 +1,186 @@
+name: CI/CD Production Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================================
+  # STAGE 1: Parallel Quality Gates (Lint, Typecheck, Unit & Integration Tests)
+  # ============================================================================
+  test-frontend:
+    name: Frontend Quality & Typecheck (Next.js)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate and Generate Prisma Client
+        run: |
+          pnpm --filter db exec prisma validate
+          pnpm --filter db exec prisma generate
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/agentic_workspace?schema=public"
+
+      - name: TypeScript Strict Typecheck
+        run: pnpm --filter web type-check
+
+      - name: Run Vitest Suite
+        run: pnpm --filter web test
+
+      - name: Next.js Production Build
+        run: pnpm --filter web build
+        env:
+          NEXT_PUBLIC_APP_URL: "https://app.agentic-void.io"
+          NEXT_PUBLIC_API_URL: "https://api.agentic-void.io/api/v1"
+
+  test-backend:
+    name: Backend Quality & Pytest Suite (FastAPI & Celery)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r apps/agent-backend/requirements.txt
+
+      - name: Syntax & Import Validation
+        run: |
+          python -c "import main; print('FastAPI main loaded successfully')"
+          python -c "import workers.celery_app; print('Celery worker loaded successfully')"
+          python -c "import tools.sandbox_executor; print('Sandbox executor loaded successfully')"
+        env:
+          PYTHONPATH: "apps/agent-backend"
+
+      - name: Run Pytest Suite
+        run: pytest apps/agent-backend/tests -v --tb=short
+        env:
+          PYTHONPATH: "apps/agent-backend"
+          NODE_ENV: "test"
+          JWT_SECRET: "ci-cd-test-secret-key-at-least-32-characters-long"
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/agentic_workspace"
+          REDIS_URL: "redis://localhost:6379/0"
+          QDRANT_URL: "http://localhost:6333"
+
+  # ============================================================================
+  # STAGE 2: Automated Deployment for Next.js Frontend (Vercel)
+  # ============================================================================
+  deploy-frontend:
+    name: Deploy Frontend to Vercel (Production)
+    needs: [test-frontend, test-backend]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: apps/web
+          vercel-args: "--prod"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================================================
+  # STAGE 3: Automated Deployment for FastAPI & Celery Workers (Render / Fly.io)
+  # ============================================================================
+  deploy-backend:
+    name: Deploy Backend & Celery Workers (Render / Fly.io)
+    needs: [test-frontend, test-backend]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Option A: Render Production Deploy Hook (Zero Downtime)
+      - name: Trigger Render FastAPI Web Service Deployment
+        if: env.RENDER_FASTAPI_DEPLOY_HOOK != ''
+        env:
+          RENDER_FASTAPI_DEPLOY_HOOK: ${{ secrets.RENDER_FASTAPI_DEPLOY_HOOK }}
+        run: |
+          echo "[Deploy] Triggering Render FastAPI deployment..."
+          curl -f -X POST "${RENDER_FASTAPI_DEPLOY_HOOK}"
+
+      - name: Trigger Render Celery Background Worker Deployment
+        if: env.RENDER_CELERY_DEPLOY_HOOK != ''
+        env:
+          RENDER_CELERY_DEPLOY_HOOK: ${{ secrets.RENDER_CELERY_DEPLOY_HOOK }}
+        run: |
+          echo "[Deploy] Triggering Render Celery Worker deployment..."
+          curl -f -X POST "${RENDER_CELERY_DEPLOY_HOOK}"
+
+      # Option B: Fly.io Deployment Fallback
+      - name: Deploy to Fly.io
+        if: env.FLY_API_TOKEN != '' && env.RENDER_FASTAPI_DEPLOY_HOOK == ''
+        uses: superfly/flyctl-actions/setup-flyctl@master
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        with:
+          version: "latest"
+      - name: Run Fly Deploy
+        if: env.FLY_API_TOKEN != '' && env.RENDER_FASTAPI_DEPLOY_HOOK == ''
+        run: flyctl deploy --remote-only --config fly.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  # ============================================================================
+  # POST-DEPLOYMENT: Automated Smoke Verification
+  # ============================================================================
+  smoke-tests:
+    name: Post-Deployment Smoke Verification
+    needs: [deploy-frontend, deploy-backend]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install HTTP Client
+        run: pip install httpx
+
+      - name: Run Live Smoke Verification
+        run: |
+          python scripts/verify_deployment.py \
+            --api-url "${{ secrets.PROD_API_URL || 'https://api.agentic-void.io' }}" \
+            --frontend-url "${{ secrets.PROD_APP_URL || 'https://app.agentic-void.io' }}" \
+            --timeout 30
+
