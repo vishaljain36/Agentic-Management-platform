@@ -146,10 +146,48 @@ const initialEdges: Edge[] = [
   },
 ];
 
+export function detectCycle(nodes: Node[], edges: Edge[]): boolean {
+  const adj = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (!adj.has(edge.source)) adj.set(edge.source, []);
+    adj.get(edge.source)!.push(edge.target);
+  }
+
+  const visited = new Set<string>();
+  const inStack = new Set<string>();
+
+  function dfs(curr: string): boolean {
+    visited.add(curr);
+    inStack.add(curr);
+
+    const neighbors = adj.get(curr) || [];
+    for (const neighbor of neighbors) {
+      if (!visited.has(neighbor)) {
+        if (dfs(neighbor)) return true;
+      } else if (inStack.has(neighbor)) {
+        // If already in recursion stack, back-edge detected -> cycle!
+        return true;
+      }
+    }
+
+    inStack.delete(curr);
+    return false;
+  }
+
+  for (const node of nodes) {
+    if (!visited.has(node.id)) {
+      if (dfs(node.id)) return true;
+    }
+  }
+  return false;
+}
+
 export interface CanvasState {
   nodes: Node[];
   edges: Edge[];
   selectedNodeId: string | null;
+  hasCycle: boolean;
+  cycleWarning: string | null;
 
   onNodesChange: OnNodesChange;
   onEdgesChange: OnEdgesChange;
@@ -158,12 +196,22 @@ export interface CanvasState {
   updateNodeStatus: (nodeId: string, status: AgentNodeData["status"]) => void;
   setEdgeActive: (edgeId: string, active: boolean) => void;
   addAgentNode: (name: string, role: string) => void;
+  dropNode: (node: {
+    id: string;
+    type?: string;
+    position?: { x: number; y: number };
+    data: Record<string, unknown>;
+  }) => void;
+  connectEdge: (source: string, target: string) => boolean;
+  resetCanvas: () => void;
 }
 
 export const useCanvasStore = create<CanvasState>((set, get) => ({
   nodes: initialNodes,
   edges: initialEdges,
   selectedNodeId: null,
+  hasCycle: false,
+  cycleWarning: null,
 
   onNodesChange: (changes) => {
     set({
@@ -178,12 +226,51 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   onConnect: (connection) => {
+    const newEdges = addEdge(
+      { ...connection, type: "edgePulse", animated: true },
+      get().edges
+    );
+    const cycle = detectCycle(get().nodes, newEdges);
     set({
-      edges: addEdge(
-        { ...connection, type: "edgePulse", animated: true },
-        get().edges
-      ),
+      edges: newEdges,
+      hasCycle: cycle,
+      cycleWarning: cycle
+        ? "Warning: Cycle detected. Agent graphs must be Directed Acyclic Graphs (DAG)."
+        : null,
     });
+  },
+
+  connectEdge: (source: string, target: string) => {
+    const id = `e${source.replace('node_', '')}-${target.replace('node_', '')}`;
+    const newEdge: Edge = {
+      id,
+      source,
+      target,
+      type: "edgePulse",
+      animated: true,
+    };
+    const updatedEdges = [...get().edges, newEdge];
+    const cycle = detectCycle(get().nodes, updatedEdges);
+    set({
+      edges: updatedEdges,
+      hasCycle: cycle,
+      cycleWarning: cycle
+        ? "Warning: Cycle detected. Agent graphs must be Directed Acyclic Graphs (DAG)."
+        : null,
+    });
+    return !cycle;
+  },
+
+  dropNode: (node) => {
+    const newNode: Node = {
+      id: node.id,
+      type: node.type || "agentNode",
+      position: node.position || { x: 100, y: 100 },
+      data: node.data,
+    };
+    set((state) => ({
+      nodes: [...state.nodes, newNode],
+    }));
   },
 
   setSelectedNodeId: (id: string | null) => {
@@ -241,6 +328,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set((state) => ({
       nodes: [...state.nodes, newNode],
     }));
+  },
+
+  resetCanvas: () => {
+    set({
+      nodes: initialNodes,
+      edges: initialEdges,
+      selectedNodeId: null,
+      hasCycle: false,
+      cycleWarning: null,
+    });
   },
 }));
 

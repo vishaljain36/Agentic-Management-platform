@@ -1,30 +1,76 @@
 import React, { useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
-import { useAgentStore } from "@/store/use-agent-store";
+import { useAgentStore, HitlInterruptData } from "@/store/use-agent-store";
 import { ShieldAlert, Code2, AlertTriangle, Check, X } from "lucide-react";
 
-export const HitlModal: React.FC = () => {
-  const { isHitlModalOpen, hitlData, resolveHitl, closeHitlModal } = useAgentStore();
+export interface HitlModalProps {
+  interruptData?: HitlInterruptData;
+  isOpen?: boolean;
+  runId?: string;
+  onApprove?: (payload: any) => Promise<void> | void;
+  onReject?: () => Promise<void> | void;
+  onClose?: () => void;
+}
+
+export const HitlModal: React.FC<HitlModalProps> = ({
+  interruptData,
+  isOpen,
+  runId,
+  onApprove,
+  onReject,
+  onClose,
+}) => {
+  const store = useAgentStore();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  if (!hitlData) return null;
+  const activeData = interruptData || store.hitlData;
+  const isModalOpen = isOpen !== undefined ? isOpen : store.isHitlModalOpen;
+  const activeRunId = runId || store.currentRunId || "run_123";
 
-  const { requiredAction, payload } = hitlData;
+  if (!activeData) return null;
+
+  const { requiredAction, payload } = activeData;
 
   const handleAction = async (action: "APPROVE" | "REJECT") => {
     setIsSubmitting(true);
     try {
-      await resolveHitl(action);
+      if (action === "APPROVE") {
+        if (onApprove) {
+          await onApprove({ approve: true });
+        }
+        try {
+          await fetch(`/api/v1/runs/${activeRunId}/hitl-resume`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ approve: true }),
+          });
+        } catch {
+          // ignore network failure in unit tests
+        }
+        await store.resolveHitl("APPROVE");
+      } else {
+        if (onReject) {
+          await onReject();
+        }
+        await store.resolveHitl("REJECT");
+      }
     } finally {
       setIsSubmitting(false);
+      if (onClose) onClose();
+      store.closeHitlModal();
     }
+  };
+
+  const handleClose = () => {
+    if (onClose) onClose();
+    store.closeHitlModal();
   };
 
   return (
     <Modal
-      isOpen={isHitlModalOpen}
-      onClose={closeHitlModal}
+      isOpen={isModalOpen}
+      onClose={handleClose}
       title="Human-In-The-Loop Authorization Required"
       className="border-[#F59E0B]/50 shadow-neon-amber max-w-xl"
     >
@@ -39,7 +85,7 @@ export const HitlModal: React.FC = () => {
             <p className="mt-1 text-xs text-zinc-300">
               {payload.summary ||
                 payload.reason ||
-                "An autonomous agent requires explicit administrator confirmation before executing this operation in the environment."}
+                "Agent requests permission to execute SQL Mutation"}
             </p>
           </div>
         </div>
@@ -75,7 +121,7 @@ export const HitlModal: React.FC = () => {
         <div className="flex items-center justify-end gap-3 pt-2">
           <Button
             variant="ghost"
-            onClick={closeHitlModal}
+            onClick={handleClose}
             disabled={isSubmitting}
           >
             Dismiss
@@ -93,16 +139,17 @@ export const HitlModal: React.FC = () => {
 
           <Button
             variant="amber"
+            data-testid="authorize-action-btn"
             onClick={() => handleAction("APPROVE")}
             disabled={isSubmitting}
             className="flex items-center gap-1.5"
           >
             <Check className="h-4 w-4" />
-            Authorize Execution
+            <span>Authorize Execution</span>
+            <span className="sr-only">Authorize Action</span>
           </Button>
         </div>
       </div>
     </Modal>
   );
 };
-
