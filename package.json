@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.12",
+    "@playwright/test": "^1.65.0",
     "pg-gateway": "0.3.0-beta.4",
     "pglite-server": "^0.1.5",
     "typescript": "^5.6.3"

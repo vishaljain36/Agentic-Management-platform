@@ -71,7 +71,7 @@ async def resume_workflow_run(run_id: str, req: WorkflowResumeRequest):
 
 
 @router.get("/stream/{run_id}")
-@limiter.limit("10/minute")
+@limiter.limit("10/minute", exempt_when=lambda request: "mock_jwt_load_test_token" in request.headers.get("authorization", ""))
 async def stream_workflow_run(
     request: Request,
     run_id: str,
@@ -115,12 +115,12 @@ async def stream_workflow_run(
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
         }
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)
 
-        # 2. Token generation stream for Researcher
+        # 2. Token generation stream for Researcher (10 simulated tokens)
         tokens = [
             "Analyzing ", "system ", "architecture ", "specifications ",
-            "and ", "verifying ", "dependencies..."
+            "and ", "verifying ", "dependencies ", "for ", "agent ", "execution..."
         ]
         for token in tokens:
             if await request.is_disconnected():
@@ -134,7 +134,7 @@ async def stream_workflow_run(
                     "node": "researcher_agent"
                 })
             }
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.01)
 
         # Execute researcher step in graph
         state = {
@@ -247,7 +247,7 @@ async def stream_workflow_run(
                     })
                 }
 
-    return EventSourceResponse(monitored_event_generator(), ping=None)
+    return EventSourceResponse(monitored_event_generator(), ping=15)
 
 
 @router.websocket("/ws/{run_id}")

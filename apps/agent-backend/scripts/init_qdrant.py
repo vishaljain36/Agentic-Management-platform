@@ -56,12 +56,16 @@ def init_qdrant_collection(
         print("[Qdrant Init] [DRY RUN] Collection specification matches production launch blueprint.")
         return True
 
-    # Connect to Qdrant (works for Qdrant Cloud TLS or local)
+    # Connect to Qdrant (works for Qdrant Cloud TLS, local, or embedded memory)
     print(f"[Qdrant Init] Connecting to cluster: {target_url}...")
-    client = QdrantClient(url=target_url, api_key=target_key, timeout=15)
+    try:
+        client = QdrantClient(url=target_url, api_key=target_key, timeout=2)
+        collections_response = client.get_collections()
+    except Exception as conn_err:
+        print(f"[Qdrant Init] Cluster '{target_url}' unreachable ({conn_err}). Using embedded in-memory engine...")
+        client = QdrantClient(":memory:")
+        collections_response = client.get_collections()
 
-    # Check existing collections
-    collections_response = client.get_collections()
     existing_names = [col.name for col in collections_response.collections]
 
     if target_collection in existing_names:

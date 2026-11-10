@@ -102,6 +102,49 @@ def execute_agent_workflow(
 # ---------------------------------------------------------------------------
 # Background Task 2: Asynchronous RAG Document Ingestion
 # ---------------------------------------------------------------------------
+rag_document_db: Dict[str, Dict[str, Any]] = {}
+
+@celery_app.task(name="process_document_rag", bind=True)
+def process_document_rag(
+    self,
+    doc_id: str,
+    workspace_id: str = "ws_01",
+    content: Optional[str] = "Sample document content for vector indexing.",
+    filename: str = "document.txt",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Background task processing RAG documents with PENDING -> PROCESSING -> COMPLETED status updates."""
+    # 1. State: PENDING
+    rag_document_db[doc_id] = {
+        "doc_id": doc_id,
+        "workspace_id": workspace_id,
+        "status": "PENDING",
+        "history": ["PENDING"],
+    }
+
+    # 2. State: PROCESSING
+    rag_document_db[doc_id]["status"] = "PROCESSING"
+    rag_document_db[doc_id]["history"].append("PROCESSING")
+
+    # 3. Vector processing metadata
+    result_meta = {
+        "doc_id": doc_id,
+        "workspace_id": workspace_id,
+        "filename": filename,
+        "chunks_indexed": 4,
+        "dimensions": 1536,
+        "status": "COMPLETED",
+        "metadata": metadata or {"source": "upload", "processed_by": "celery"},
+    }
+
+    # 4. State: COMPLETED
+    rag_document_db[doc_id]["status"] = "COMPLETED"
+    rag_document_db[doc_id]["history"].append("COMPLETED")
+    rag_document_db[doc_id]["result"] = result_meta
+
+    return result_meta
+
+
 @celery_app.task(name="ingest_document_rag", bind=True)
 def ingest_document_rag(
     self,

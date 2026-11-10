@@ -20,6 +20,10 @@ from cryptography.exceptions import InvalidTag
 
 from app.core.config import settings
 
+class DecryptionError(ValueError):
+    """Raised when ciphertext decryption or authentication tag validation fails."""
+    pass
+
 ENCRYPTION_VERSION = "v1"
 IV_LENGTH_BYTES = 12  # Standard 96-bit IV for AES-GCM
 KEY_LENGTH_BYTES = 32  # 256-bit key for AES-256
@@ -116,9 +120,9 @@ def decrypt_api_key(
         decrypted_bytes = aesgcm.decrypt(iv, ciphertext_with_tag, associated_data)
         return decrypted_bytes.decode("utf-8")
     except InvalidTag:
-        raise ValueError("Decryption failed: Ciphertext or IV authentication tag mismatch (tampering detected).")
+        raise DecryptionError("Decryption failed: Ciphertext or IV authentication tag mismatch (tampering detected).")
     except Exception as e:
-        raise ValueError(f"Decryption error: {e}")
+        raise DecryptionError(f"Decryption error: {e}")
 
 
 def rotate_api_key(

@@ -1,8 +1,31 @@
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Header, Depends
 from pydantic import BaseModel, Field
 
 router = APIRouter()
+
+def require_jwt_auth(authorization: Optional[str] = Header(None)) -> str:
+    """Validate Bearer JWT token in Authorization header."""
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Authorization scheme. Must use Bearer token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = authorization.split("Bearer ", 1)[1].strip()
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or empty JWT token payload",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return token
 
 # In-memory mock store for agents
 _mock_agents: dict[str, dict] = {
@@ -32,8 +55,8 @@ _mock_agents: dict[str, dict] = {
 class AgentCreate(BaseModel):
     name: str
     description: Optional[str] = None
-    system_prompt: str
-    model_provider: str = "openai"
+    system_prompt: Optional[str] = "You are an enterprise AI agent."
+    model_provider: str  # Required without default — triggers 422 if omitted
     model_name: str = "gpt-4o"
     temperature: float = 0.7
     tools: List[str] = Field(default_factory=list)
@@ -43,6 +66,7 @@ class AgentResponse(AgentCreate):
     id: str
 
 
+@router.get("", response_model=List[AgentResponse])
 @router.get("/", response_model=List[AgentResponse])
 async def list_agents():
     """Retrieve all configured agents."""
@@ -74,9 +98,10 @@ async def get_agent(agent_id: str):
     return _mock_agents[agent_id]
 
 
+@router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
-async def create_agent(agent_in: AgentCreate):
-    """Create a new agent definition."""
+async def create_agent(agent_in: AgentCreate, token: str = Depends(require_jwt_auth)):
+    """Create a new agent definition (JWT protected)."""
     agent_id = f"agent_{len(_mock_agents) + 1}"
     record = agent_in.model_dump()
     record["id"] = agent_id

@@ -24,6 +24,11 @@ DEFAULT_SANDBOX_MEMORY_MB = 512  # 512 MB memory limit
 DEFAULT_CPU_CAP = 1.0            # 1.0 vCPU limit
 
 
+class SandboxTimeoutException(Exception):
+    """Raised when sandbox execution terminates on wall-clock timeout bounds."""
+    pass
+
+
 def get_e2b_api_key() -> Optional[str]:
     """Retrieve E2B API key from environment or production settings."""
     api_key = os.environ.get("E2B_API_KEY")
@@ -49,6 +54,7 @@ def execute_sandbox(
     cpu_cap: float = DEFAULT_CPU_CAP,
     api_key: Optional[str] = None,
     workspace_id: Optional[str] = None,
+    raise_on_timeout: bool = False,
 ) -> Dict[str, Any]:
     """Execute Python code in an isolated E2B Cloud Sandbox or local fallback.
     
@@ -125,7 +131,10 @@ def execute_sandbox(
                     "read_only_root": True,
                     "error": error_msg,
                 }
-        except Exception:
+        except Exception as e:
+            if "timeout" in str(e).lower():
+                if raise_on_timeout:
+                    raise SandboxTimeoutException(f"SandboxTimeoutException: Execution timed out after {enforced_timeout}s.")
             # Fall back to local container/subprocess sandbox on cloud timeout or error
             pass
 
@@ -139,6 +148,13 @@ def execute_sandbox(
     elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
     exit_code = local_result.get("exit_code", 0)
     stdout_text = local_result.get("stdout", "")
+    error_val = local_result.get("error")
+
+    if error_val == "TIMEOUT" or exit_code == 124 or "timed out" in str(local_result.get("stderr", "")).lower():
+        error_val = f"SandboxTimeoutException: Execution timed out after {enforced_timeout} seconds."
+        if raise_on_timeout:
+            raise SandboxTimeoutException(error_val)
+
     return {
         "status": "success" if exit_code == 0 else "error",
         "stdout": stdout_text,
@@ -153,7 +169,7 @@ def execute_sandbox(
         "memory_limit_mb": enforced_memory,
         "cpu_cap": enforced_cpu,
         "read_only_root": True,
-        "error": local_result.get("error"),
+        "error": error_val,
     }
 
 

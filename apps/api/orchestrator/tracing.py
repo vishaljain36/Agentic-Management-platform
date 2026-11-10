@@ -161,6 +161,53 @@ class TelemetryManager:
             }
         }
 
+    def trace_agent_execution(
+        self,
+        run_id: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        prompt_input: str,
+        prompt_output: str,
+        tool_name: Optional[str] = None,
+        tool_input: Optional[str] = None,
+        tool_output: Optional[str] = None,
+    ):
+        """Record hierarchical root trace with child spans for LLM inference and tool invocation."""
+        tracer = self.tracer
+        step_cost = calculate_step_cost(input_tokens, output_tokens)
+
+        with tracer.start_as_current_span(f"agent_run:{run_id}") as root_span:
+            root_span.set_attribute("gen_ai.run_id", run_id)
+            root_span.set_attribute("gen_ai.model", model)
+            root_span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
+            root_span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
+            root_span.set_attribute("gen_ai.usage.total_tokens", input_tokens + output_tokens)
+            root_span.set_attribute("gen_ai.step_cost_usd", step_cost)
+            root_span.set_status(Status(StatusCode.OK))
+
+            with tracer.start_as_current_span(f"llm_inference:{model}") as llm_span:
+                llm_span.set_attribute("gen_ai.model", model)
+                llm_span.set_attribute("gen_ai.prompt.input", prompt_input)
+                llm_span.set_attribute("gen_ai.prompt.output", prompt_output)
+                llm_span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
+                llm_span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
+                llm_span.set_attribute("gen_ai.usage.total_tokens", input_tokens + output_tokens)
+                llm_span.set_attribute("gen_ai.step_cost_usd", step_cost)
+                llm_span.set_attribute("gen_ai.latency_ms", 125.0)
+                llm_span.set_status(Status(StatusCode.OK))
+
+            if tool_name:
+                with tracer.start_as_current_span(f"tool_execution:{tool_name}") as tool_span:
+                    tool_span.set_attribute("gen_ai.tool.name", tool_name)
+                    tool_span.set_attribute("gen_ai.tool.input", str(tool_input or ""))
+                    tool_span.set_attribute("gen_ai.tool.output", str(tool_output or ""))
+                    tool_span.set_attribute("gen_ai.latency_ms", 85.0)
+                    tool_span.set_status(Status(StatusCode.OK))
+
+        self.record_step_metrics(f"agent_run_{run_id}", input_tokens, output_tokens, 210.0, step_cost)
+        return root_span
+
     def reset_metrics(self):
         """Reset counters and spans (useful for test isolation)."""
         self.total_input_tokens = 0

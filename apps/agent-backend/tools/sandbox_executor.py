@@ -8,6 +8,7 @@ from app.agents.tools.sandbox_executor import (
     DEFAULT_SANDBOX_MEMORY_MB,
     DEFAULT_CPU_CAP,
     get_e2b_api_key,
+    SandboxTimeoutException,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "DEFAULT_SANDBOX_MEMORY_MB",
     "DEFAULT_CPU_CAP",
     "get_e2b_api_key",
+    "SandboxTimeoutException",
 ]
