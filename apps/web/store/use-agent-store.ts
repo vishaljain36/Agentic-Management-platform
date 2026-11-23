@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useWorkspaceStore } from "./use-workspace-store";
 
 export interface HitlInterruptData {
   requiredAction: string;
@@ -76,10 +77,24 @@ export const useAgentStore = create<AgentRunState>((set, get) => ({
       eventSource.addEventListener("node_start", (e) => {
         try {
           const data = JSON.parse(e.data);
+          const nodeName = data.node || "researcher";
           set((state) => ({
-            activeNode: data.node,
-            thoughtLogs: [...state.thoughtLogs, `[NODE] Activated: ${data.node}`],
+            activeNode: nodeName,
+            thoughtLogs: [...state.thoughtLogs, `[NODE] Activated: ${nodeName}`],
           }));
+
+          // Drive 3D Spatial Canvas Telemetry
+          const wsStore = useWorkspaceStore.getState();
+          wsStore.setActiveAgentId(nodeName);
+          wsStore.setActiveEdgeId(`e-${nodeName}`);
+          if (nodeName === "evaluator" || nodeName === "tool_sandbox") {
+            wsStore.setSandboxingAgentId(nodeName);
+          } else {
+            wsStore.setSandboxingAgentId(null);
+          }
+          if (nodeName === "researcher" || nodeName === "tool_vector") {
+            wsStore.setActiveRagDocIds(["qdrant_doc_01", "qdrant_doc_02"]);
+          }
         } catch {
           // parse error fallback
         }
@@ -103,6 +118,7 @@ export const useAgentStore = create<AgentRunState>((set, get) => ({
             requiredAction: data.required_action || "EXECUTE_PYTHON_CODE",
             payload: data.payload || {},
           };
+          useWorkspaceStore.getState().setHitlPausedAgentId("human_approval");
           get().triggerHitl(hitlInfo);
         } catch {
           // parse error fallback
@@ -112,6 +128,10 @@ export const useAgentStore = create<AgentRunState>((set, get) => ({
       eventSource.addEventListener("run_complete", (e) => {
         try {
           const data = JSON.parse(e.data);
+          useWorkspaceStore.getState().setActiveAgentId(null);
+          useWorkspaceStore.getState().setActiveEdgeId(null);
+          useWorkspaceStore.getState().setSandboxingAgentId(null);
+          useWorkspaceStore.getState().setHitlPausedAgentId(null);
           set((state) => ({
             status: "COMPLETED",
             activeNode: null,
@@ -174,6 +194,8 @@ export const useAgentStore = create<AgentRunState>((set, get) => ({
       console.error("Failed to resume HITL:", err);
     }
 
+    useWorkspaceStore.getState().setHitlPausedAgentId(null);
+
     set((state) => ({
       isHitlModalOpen: false,
       status: "RUNNING",
@@ -185,10 +207,18 @@ export const useAgentStore = create<AgentRunState>((set, get) => ({
   },
 
   closeHitlModal: () => {
+    useWorkspaceStore.getState().setHitlPausedAgentId(null);
     set({ isHitlModalOpen: false });
   },
 
   resetRun: () => {
+    const wsStore = useWorkspaceStore.getState();
+    wsStore.setActiveAgentId(null);
+    wsStore.setActiveEdgeId(null);
+    wsStore.setSandboxingAgentId(null);
+    wsStore.setHitlPausedAgentId(null);
+    wsStore.setActiveRagDocIds([]);
+
     set({
       currentRunId: null,
       status: "IDLE",

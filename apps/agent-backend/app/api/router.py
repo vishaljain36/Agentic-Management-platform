@@ -1,8 +1,26 @@
 from typing import Optional
 from fastapi import APIRouter, Request, Query
+from pydantic import BaseModel
 from app.api.v1 import agents, workflow, rag, billing, telemetry
 
 api_router = APIRouter()
+
+class LoginRequest(BaseModel):
+    email: str
+    password: Optional[str] = None
+
+@api_router.post("/auth/login", tags=["Auth"])
+async def auth_login(req: LoginRequest):
+    return {
+        "access_token": "jwt_mock_valid_999",
+        "token_type": "bearer",
+        "user": {
+            "id": "usr_admin_001",
+            "email": req.email,
+            "role": "ADMIN",
+            "name": "System Administrator",
+        },
+    }
 
 # Direct alias for SSE streaming endpoint: /api/v1/stream/{run_id}
 @api_router.get("/stream/{run_id}", tags=["Workflow"])

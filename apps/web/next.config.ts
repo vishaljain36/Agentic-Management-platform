@@ -88,7 +88,7 @@ const nextConfig: NextConfig = {
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob: https:",
               "font-src 'self' data:",
-              `connect-src 'self' ${API_HOST} ws: wss: https://cloud.langfuse.com`,
+              `connect-src 'self' ${API_HOST} ws: wss: https://cloud.langfuse.com https://raw.githack.com https://raw.githubusercontent.com https://dl.polyhaven.org`,
               "frame-ancestors 'none'",
               "base-uri 'self'",
               "form-action 'self'",
